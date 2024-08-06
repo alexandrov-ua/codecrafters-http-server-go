@@ -71,8 +71,21 @@ func (ctx *ServerContext) AcceptConnection(conn net.Conn) error {
 		return fmt.Errorf("error accepting the connection: %w", err)
 	}
 
+	requestHeaders := make(map[string]string)
+	for headerLine, _, e := reader.ReadLine(); len(headerLine) > 0 && e == nil; headerLine, _, e = reader.ReadLine() {
+		hkey, hval, _ := strings.Cut(string(headerLine), ":")
+		requestHeaders[hkey] = strings.Trim(hval, " ")
+	}
+
 	if handler, params, ok := ctx.MatchPath(verb + " " + path); ok {
-		rctx := RequestContextImpl{status: 200, body: make([]byte, 0), params: params, headers: make(map[string]string)}
+		rctx := RequestContextImpl{
+			status:          200,
+			body:            make([]byte, 0),
+			params:          params,
+			responseHeaders: make(map[string]string),
+			requestHeaders:  requestHeaders,
+		}
+
 		handler(&rctx)
 		conn.Write(rctx.ToResponseBytes())
 	} else {
@@ -114,14 +127,16 @@ func (ctx *ServerContext) MatchPath(desc string) (handler handlerFunc, params ma
 type RequestContext interface {
 	GetParam(s string) string
 	GetQuery(s string) string
+	GetHeader(s string) string
 	RespondWithStatusString(status int, body string)
 }
 
 type RequestContextImpl struct {
-	params  map[string]string
-	headers map[string]string
-	body    []byte
-	status  int
+	params          map[string]string
+	responseHeaders map[string]string
+	requestHeaders  map[string]string
+	body            []byte
+	status          int
 }
 
 func (ctx *RequestContextImpl) GetParam(s string) string {
@@ -132,17 +147,21 @@ func (ctx *RequestContextImpl) GetQuery(s string) string {
 	return "" //TODO: implement
 }
 
+func (ctx *RequestContextImpl) GetHeader(s string) string {
+	return ctx.requestHeaders[s]
+}
+
 func (ctx *RequestContextImpl) RespondWithStatusString(status int, body string) {
 	ctx.body = []byte(body)
 	ctx.status = status
-	ctx.headers["Content-Type"] = "text/plain"
-	ctx.headers["Content-Length"] = strconv.Itoa(len(body))
+	ctx.responseHeaders["Content-Type"] = "text/plain"
+	ctx.responseHeaders["Content-Length"] = strconv.Itoa(len(body))
 }
 
 func (ctx *RequestContextImpl) ToResponseBytes() []byte {
 	builder := strings.Builder{}
 	builder.WriteString(fmt.Sprintf("HTTP/1.1 %v %v\r\n", ctx.status, statusCodeNames[ctx.status]))
-	for k, v := range ctx.headers {
+	for k, v := range ctx.responseHeaders {
 		builder.WriteString(fmt.Sprintf("%v: %v\r\n", k, v))
 	}
 	builder.WriteString("\r\n")
