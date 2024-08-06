@@ -2,9 +2,9 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -46,11 +46,19 @@ func (ctx *ServerContext) Listen(addr string) {
 }
 
 func (ctx *ServerContext) Get(path string, handler handlerFunc) {
+	ctx.registerHandler("GET", path, handler)
+}
+
+func (ctx *ServerContext) Post(path string, handler handlerFunc) {
+	ctx.registerHandler("POST", path, handler)
+}
+
+func (ctx *ServerContext) registerHandler(verb string, path string, handler handlerFunc) {
 	if l, r, ok := strings.Cut(path, "{"); ok { //TODO: validate params
 		paramName := strings.Split(r, "}")[0]
-		ctx.handlersFuzzy["GET "+l] = FuzzyParams{paramName: paramName, handler: handler}
+		ctx.handlersFuzzy[verb+" "+l] = FuzzyParams{paramName: paramName, handler: handler}
 	} else {
-		ctx.handlers["GET "+path] = handler
+		ctx.handlers[verb+" "+l] = handler
 	}
 }
 
@@ -63,12 +71,7 @@ func (ctx *ServerContext) AcceptConnectionAndHandleErrors(conn net.Conn) {
 }
 
 func (ctx *ServerContext) AcceptConnection(conn net.Conn) error {
-	buff := make([]byte, 1024)
-	n, err := conn.Read(buff)
-	if err != nil {
-		return fmt.Errorf("error accepting the connection: %w", err)
-	}
-	reader := bufio.NewReader(bytes.NewReader(buff[:n]))
+	reader := bufio.NewReader(conn)
 	line, _, err := reader.ReadLine()
 	if err != nil {
 		return fmt.Errorf("error accepting the connection: %w", err)
@@ -84,6 +87,14 @@ func (ctx *ServerContext) AcceptConnection(conn net.Conn) error {
 		requestHeaders[hkey] = strings.Trim(hval, " ")
 	}
 
+	var requestBody []byte = make([]byte, 0)
+	if cl, ok := requestHeaders["Content-Length"]; ok {
+		if length, e := strconv.Atoi(cl); e == nil {
+			requestBody = make([]byte, length)
+			io.ReadFull(reader, requestBody)
+		}
+	}
+
 	if handler, params, ok := ctx.MatchPath(verb + " " + path); ok {
 		rctx := RequestContextImpl{
 			status:          200,
@@ -91,6 +102,7 @@ func (ctx *ServerContext) AcceptConnection(conn net.Conn) error {
 			params:          params,
 			responseHeaders: make(map[string]string),
 			requestHeaders:  requestHeaders,
+			requestBodyRaw:  requestBody,
 		}
 
 		handler(&rctx)
@@ -137,6 +149,8 @@ type RequestContext interface {
 	GetHeader(s string) string
 	RespondWithStatusString(status int, body string)
 	RespondWithStatusFile(status int, path string)
+	RespondWithStatus(status int)
+	GetBody() string
 }
 
 type RequestContextImpl struct {
@@ -145,6 +159,7 @@ type RequestContextImpl struct {
 	requestHeaders  map[string]string
 	body            []byte
 	status          int
+	requestBodyRaw  []byte
 }
 
 func (ctx *RequestContextImpl) GetParam(s string) string {
@@ -157,6 +172,14 @@ func (ctx *RequestContextImpl) GetQuery(s string) string {
 
 func (ctx *RequestContextImpl) GetHeader(s string) string {
 	return ctx.requestHeaders[s]
+}
+
+func (ctx *RequestContextImpl) GetBody() string {
+	return string(ctx.requestBodyRaw)
+}
+
+func (ctx *RequestContextImpl) RespondWithStatus(status int) {
+	ctx.status = status
 }
 
 func (ctx *RequestContextImpl) RespondWithStatusString(status int, body string) {

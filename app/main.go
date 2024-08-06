@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 )
 
 func main() {
@@ -21,6 +22,18 @@ func main() {
 	})
 	srv.Get("/files/{fileName}", func(r RequestContext) {
 		r.RespondWithStatusFile(200, *dirName+r.GetParam("fileName"))
+	})
+	srv.Post("/files/{fileName}", func(r RequestContext) {
+		file, err := os.Create(*dirName + r.GetParam("fileName"))
+		if err != nil {
+			r.RespondWithStatusString(500, "Failed to create file")
+			return
+		}
+		if _, err := file.WriteString(r.GetBody()); err != nil {
+			r.RespondWithStatusString(500, "Failed to write file")
+			return
+		}
+		r.RespondWithStatus(201)
 	})
 
 	srv.Listen("0.0.0.0:4221")
