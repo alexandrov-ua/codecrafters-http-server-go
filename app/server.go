@@ -10,6 +10,7 @@ import (
 	"strings"
 )
 
+// urls
 var urls = make(map[string]int)
 
 func main() {
