@@ -8,6 +8,8 @@ import (
 
 func main() {
 	var dirName = flag.String("directory", "/tmp/", "Dirictory name")
+	flag.Parse()
+
 	fmt.Println("Logs from your program will appear here!")
 	srv := CreateServer()
 
