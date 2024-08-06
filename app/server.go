@@ -34,15 +34,14 @@ func (ctx *ServerContext) Listen(addr string) {
 		os.Exit(1)
 	}
 
-	conn, err := l.Accept()
+	for {
+		conn, err := l.Accept()
 
-	if err != nil {
-		fmt.Println("Error accepting connection: ", err.Error())
-		os.Exit(1)
-	}
-	if err := ctx.AcceptConnection(conn); err != nil {
-		fmt.Println(err)
-		conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+		if err != nil {
+			fmt.Println("Error accepting connection: ", err.Error())
+			os.Exit(1)
+		}
+		go ctx.AcceptConnectionAndHandleErrors(conn)
 	}
 }
 
@@ -53,6 +52,14 @@ func (ctx *ServerContext) Get(path string, handler handlerFunc) {
 	} else {
 		ctx.handlers["GET "+path] = handler
 	}
+}
+
+func (ctx *ServerContext) AcceptConnectionAndHandleErrors(conn net.Conn) {
+	if err := ctx.AcceptConnection(conn); err != nil {
+		fmt.Println(err)
+		conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+	}
+	conn.Close()
 }
 
 func (ctx *ServerContext) AcceptConnection(conn net.Conn) error {
