@@ -136,6 +136,7 @@ type RequestContext interface {
 	GetQuery(s string) string
 	GetHeader(s string) string
 	RespondWithStatusString(status int, body string)
+	RespondWithStatusFile(status int, path string)
 }
 
 type RequestContextImpl struct {
@@ -163,6 +164,19 @@ func (ctx *RequestContextImpl) RespondWithStatusString(status int, body string) 
 	ctx.status = status
 	ctx.responseHeaders["Content-Type"] = "text/plain"
 	ctx.responseHeaders["Content-Length"] = strconv.Itoa(len(body))
+}
+
+func (ctx *RequestContextImpl) RespondWithStatusFile(status int, path string) {
+
+	if fileText, err := os.ReadFile(path); err == nil {
+		ctx.body = []byte(fileText)
+		ctx.status = status
+		ctx.responseHeaders["Content-Type"] = "application/octet-stream"
+		ctx.responseHeaders["Content-Length"] = strconv.Itoa(len(fileText))
+	} else {
+		ctx.RespondWithStatusString(404, "File doesn't exists")
+	}
+
 }
 
 func (ctx *RequestContextImpl) ToResponseBytes() []byte {

@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"os"
 )
 
 func main() {
@@ -21,11 +20,7 @@ func main() {
 		r.RespondWithStatusString(200, r.GetHeader("User-Agent"))
 	})
 	srv.Get("/files/{fileName}", func(r RequestContext) {
-		if fileText, err := os.ReadFile(*dirName + r.GetParam("fileName")); err == nil {
-			r.RespondWithStatusString(200, string(fileText))
-		} else {
-			r.RespondWithStatusString(404, "File doesn't exists")
-		}
+		r.RespondWithStatusFile(200, *dirName+r.GetParam("fileName"))
 	})
 
 	srv.Listen("0.0.0.0:4221")
