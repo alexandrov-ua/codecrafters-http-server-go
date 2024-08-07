@@ -19,7 +19,11 @@ func main() {
 	srv.Get("/user-agent", func(r RequestContext) {
 		r.RespondWithStatusString(200, r.GetHeader("User-Agent"))
 	})
-	srv.UseStaticFiles("/files/", *dirName, true)
+	srv.UseStaticFiles("/files/", StaticFilesSettings{
+		FolderPath:  *dirName,
+		AllowUpload: true,
+		EnableMime:  true,
+	})
 	srv.UseEncoding()
 
 	srv.Listen("0.0.0.0:4221")

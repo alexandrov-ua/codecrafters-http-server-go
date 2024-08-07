@@ -171,7 +171,6 @@ type RequestContext interface {
 	GetQuery(s string) string
 	GetHeader(s string) string
 	RespondWithStatusString(status int, body string)
-	RespondWithStatusFile(status int, path string)
 	RespondWithStatus(status int)
 	GetBody() string
 }
