@@ -12,19 +12,22 @@ import (
 )
 
 func CreateServer() ServerContext {
-	return ServerContext{handlers: make(map[string]handlerFunc), handlersFuzzy: make(map[string]FuzzyParams)}
+	return ServerContext{handlers: make([]MethodDescriptor, 0), middlewares: RoutingMiddleWare}
 }
 
 type handlerFunc func(RequestContext)
 
+type middlewareFuncInternal func(*ServerContext, *RequestContextImpl)
+type middlewareFunc func(middlewareFuncInternal, *ServerContext, *RequestContextImpl)
+
 type ServerContext struct {
-	handlers      map[string]handlerFunc
-	handlersFuzzy map[string]FuzzyParams
+	handlers    []MethodDescriptor
+	middlewares middlewareFuncInternal
 }
 
-type FuzzyParams struct { //TODO: expect more then one param
-	paramName string
-	handler   handlerFunc
+type MethodDescriptor struct {
+	Handler handlerFunc
+	Matcher Matcher
 }
 
 func (ctx *ServerContext) Listen(addr string) {
@@ -45,6 +48,13 @@ func (ctx *ServerContext) Listen(addr string) {
 	}
 }
 
+func (ctx *ServerContext) Use(f middlewareFunc) {
+	tmp := ctx.middlewares
+	ctx.middlewares = func(ctx *ServerContext, rctx *RequestContextImpl) {
+		f(tmp, ctx, rctx)
+	}
+}
+
 func (ctx *ServerContext) Get(path string, handler handlerFunc) {
 	ctx.registerHandler("GET", path, handler)
 }
@@ -53,13 +63,13 @@ func (ctx *ServerContext) Post(path string, handler handlerFunc) {
 	ctx.registerHandler("POST", path, handler)
 }
 
-func (ctx *ServerContext) registerHandler(verb string, path string, handler handlerFunc) {
-	if l, r, ok := strings.Cut(path, "{"); ok { //TODO: validate params
-		paramName := strings.Split(r, "}")[0]
-		ctx.handlersFuzzy[verb+" "+l] = FuzzyParams{paramName: paramName, handler: handler}
+func (ctx *ServerContext) registerHandler(verb string, path string, handler handlerFunc) error {
+	if m, e := CreateUrlMatcher(verb + " " + path); e != nil {
+		return e
 	} else {
-		ctx.handlers[verb+" "+l] = handler
+		ctx.handlers = append(ctx.handlers, MethodDescriptor{Matcher: m, Handler: handler})
 	}
+	return nil
 }
 
 func (ctx *ServerContext) AcceptConnectionAndHandleErrors(conn net.Conn) {
@@ -95,22 +105,33 @@ func (ctx *ServerContext) AcceptConnection(conn net.Conn) error {
 		}
 	}
 
-	if handler, params, ok := ctx.MatchPath(verb + " " + path); ok {
-		rctx := RequestContextImpl{
-			status:          200,
-			body:            make([]byte, 0),
-			params:          params,
-			responseHeaders: make(map[string]string),
-			requestHeaders:  requestHeaders,
-			requestBodyRaw:  requestBody,
-		}
-
-		handler(&rctx)
-		conn.Write(rctx.ToResponseBytes())
-	} else {
-		conn.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
+	rctx := RequestContextImpl{
+		path:            path,
+		method:          verb,
+		status:          200,
+		body:            strings.NewReader(""),
+		params:          make(map[string]string),
+		responseHeaders: make(map[string]string),
+		requestHeaders:  requestHeaders,
+		requestBodyRaw:  requestBody,
 	}
+	writer := bufio.NewWriter(conn)
+	ctx.middlewares(ctx, &rctx)
+	WriteResponse(writer, rctx)
+	writer.Flush()
+
 	return nil
+}
+
+func RoutingMiddleWare(ctx *ServerContext, rctx *RequestContextImpl) {
+	if handler, params, ok := ctx.MatchPath(rctx.method + " " + rctx.path); ok {
+		for k, v := range params {
+			rctx.params[k] = v
+		}
+		handler(rctx)
+	} else {
+		rctx.RespondWithStatus(404)
+	}
 }
 
 func ParseStartLine(l []byte) (verb string, path string, query string, err error) {
@@ -126,19 +147,21 @@ func ParseStartLine(l []byte) (verb string, path string, query string, err error
 }
 
 func (ctx *ServerContext) MatchPath(desc string) (handler handlerFunc, params map[string]string, ok bool) {
-	if h, ok := ctx.handlers[desc]; ok {
-		return h, make(map[string]string), true
-	} else {
-		for k, v := range ctx.handlersFuzzy {
-			if after, ok := strings.CutPrefix(desc, k); ok {
-				val := strings.Split(after, "/")[0]
-				params := make(map[string]string)
-				params[v.paramName] = val
-				return v.handler, params, true
-			}
+	for _, v := range ctx.handlers {
+		if p, ok := v.Matcher(desc); ok {
+			return v.Handler, p, true
 		}
 	}
 	return nil, nil, false
+}
+
+func WriteResponse(writer *bufio.Writer, req RequestContextImpl) {
+	writer.WriteString(fmt.Sprintf("HTTP/1.1 %v %v\r\n", req.status, statusCodeNames[req.status]))
+	for k, v := range req.responseHeaders {
+		writer.WriteString(fmt.Sprintf("%v: %v\r\n", k, v))
+	}
+	writer.WriteString("\r\n")
+	writer.ReadFrom(req.body)
 }
 
 //------- Request specific logic ---------------
@@ -154,10 +177,12 @@ type RequestContext interface {
 }
 
 type RequestContextImpl struct {
+	path            string
+	method          string
 	params          map[string]string
 	responseHeaders map[string]string
 	requestHeaders  map[string]string
-	body            []byte
+	body            io.Reader
 	status          int
 	requestBodyRaw  []byte
 }
@@ -183,96 +208,8 @@ func (ctx *RequestContextImpl) RespondWithStatus(status int) {
 }
 
 func (ctx *RequestContextImpl) RespondWithStatusString(status int, body string) {
-	ctx.body = []byte(body)
+	ctx.body = strings.NewReader(body)
 	ctx.status = status
 	ctx.responseHeaders["Content-Type"] = "text/plain"
 	ctx.responseHeaders["Content-Length"] = strconv.Itoa(len(body))
-}
-
-func (ctx *RequestContextImpl) RespondWithStatusFile(status int, path string) {
-
-	if fileText, err := os.ReadFile(path); err == nil {
-		ctx.body = []byte(fileText)
-		ctx.status = status
-		ctx.responseHeaders["Content-Type"] = "application/octet-stream"
-		ctx.responseHeaders["Content-Length"] = strconv.Itoa(len(fileText))
-	} else {
-		ctx.RespondWithStatusString(404, "File doesn't exists")
-	}
-
-}
-
-func (ctx *RequestContextImpl) ToResponseBytes() []byte {
-	builder := strings.Builder{}
-	builder.WriteString(fmt.Sprintf("HTTP/1.1 %v %v\r\n", ctx.status, statusCodeNames[ctx.status]))
-	for k, v := range ctx.responseHeaders {
-		builder.WriteString(fmt.Sprintf("%v: %v\r\n", k, v))
-	}
-	builder.WriteString("\r\n")
-	builder.WriteString(string(ctx.body))
-	return []byte(builder.String())
-}
-
-var statusCodeNames = map[int]string{
-	100: "Continue",
-	101: "Switching Protocols",
-	102: "Processing",
-	103: "Early Hints",
-	200: "OK",
-	201: "Created",
-	202: "Accepted",
-	203: "Non-Authoritative Information",
-	204: "No Content",
-	205: "Reset Content",
-	206: "Partial Content",
-	207: "Multi-Status",
-	208: "Already Reported",
-	226: "IM Used",
-	300: "Multiple Choices",
-	301: "Moved Permanently",
-	302: "Found",
-	303: "See Other",
-	304: "Not Modified",
-	307: "Temporary Redirect",
-	308: "Permanent Redirect",
-	400: "Bad Request",
-	401: "Unauthorized",
-	402: "Payment Required",
-	403: "Forbidden",
-	404: "Not Found",
-	405: "Method Not Allowed",
-	406: "Not Acceptable",
-	407: "Proxy Authentication Required",
-	408: "Request Timeout",
-	409: "Conflict",
-	410: "Gone",
-	411: "Length Required",
-	412: "Precondition Failed",
-	413: "Content Too Large",
-	414: "URI Too Long",
-	415: "Unsupported Media Type",
-	416: "Range Not Satisfiable",
-	417: "Expectation Failed",
-	418: "I'm a teapot",
-	421: "Misdirected Request",
-	422: "Unprocessable Content",
-	423: "Locked",
-	424: "Failed Dependency",
-	425: "Too Early",
-	426: "Upgrade Required",
-	428: "Precondition Required",
-	429: "Too Many Requests",
-	431: "Request Header Fields Too Large",
-	451: "Unavailable For Legal Reasons",
-	500: "Internal Server Error",
-	501: "Not Implemented",
-	502: "Bad Gateway",
-	503: "Service Unavailable",
-	504: "Gateway Timeout",
-	505: "HTTP Version Not Supported",
-	506: "Variant Also Negotiates",
-	507: "Insufficient Storage",
-	508: "Loop Detected",
-	510: "Not Extended",
-	511: "Network Authentication Required",
 }
