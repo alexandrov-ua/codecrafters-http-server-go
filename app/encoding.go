@@ -1,9 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"compress/gzip"
+	"io"
 	"strconv"
 	"strings"
 )
@@ -32,12 +32,12 @@ func EncodingMiddleware(next middlewareFuncInternal, ctx *ServerContext, rctx *R
 
 func HandleGzipCompression(rctx *RequestContextImpl) {
 	rctx.responseHeaders["Content-Encoding"] = "gzip"
-	size, _ := strconv.Atoi(rctx.responseHeaders["Content-Length"])
-	buf := bytes.NewBuffer(make([]byte, size))
-	w := bufio.NewWriter(gzip.NewWriter(buf))
+	buf := bytes.Buffer{}
+	w := gzip.NewWriter(&buf)
 
-	w.ReadFrom(rctx.body)
+	io.Copy(w, rctx.body)
 	w.Flush()
+	w.Close()
 
 	rctx.body = bytes.NewReader(buf.Bytes())
 	rctx.responseHeaders["Content-Length"] = strconv.Itoa(len(buf.Bytes()))
