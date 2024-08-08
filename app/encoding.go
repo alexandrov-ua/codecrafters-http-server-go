@@ -15,9 +15,8 @@ func (ctx *ServerContext) UseEncoding() {
 var supportedEncodings = map[string]func(*RequestContextImpl){"gzip": HandleGzipCompression}
 
 func EncodingMiddleware(next middlewareFuncInternal, ctx *ServerContext, rctx *RequestContextImpl) {
-	if ecncodingHeader, ok := rctx.requestHeaders["Accept-Encoding"]; ok {
+	if encodings, ok := rctx.requestHeaders["Accept-Encoding"]; ok {
 
-		encodings := strings.Split(ecncodingHeader, ",")
 		for _, enc := range encodings {
 			enc = strings.Trim(enc, " ")
 			if prov, ok := supportedEncodings[enc]; ok {
@@ -31,7 +30,7 @@ func EncodingMiddleware(next middlewareFuncInternal, ctx *ServerContext, rctx *R
 }
 
 func HandleGzipCompression(rctx *RequestContextImpl) {
-	rctx.responseHeaders["Content-Encoding"] = "gzip"
+	rctx.responseHeaders["Content-Encoding"] = []string{"gzip"}
 	buf := bytes.Buffer{}
 	w := gzip.NewWriter(&buf)
 
@@ -40,5 +39,5 @@ func HandleGzipCompression(rctx *RequestContextImpl) {
 	w.Close()
 
 	rctx.body = bytes.NewReader(buf.Bytes())
-	rctx.responseHeaders["Content-Length"] = strconv.Itoa(len(buf.Bytes()))
+	rctx.responseHeaders["Content-Length"] = []string{strconv.Itoa(len(buf.Bytes()))}
 }

@@ -17,7 +17,7 @@ func main() {
 		r.RespondWithStatusString(200, r.GetParam("str"))
 	})
 	srv.Get("/user-agent", func(r RequestContext) {
-		r.RespondWithStatusString(200, r.GetHeader("User-Agent"))
+		r.RespondWithStatusString(200, r.GetHeader("User-Agent").GetFirst())
 	})
 	srv.UseStaticFiles("/files/", StaticFilesSettings{
 		FolderPath:  *dirName,

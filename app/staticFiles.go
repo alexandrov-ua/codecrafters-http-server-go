@@ -59,11 +59,11 @@ func HandleDownload(ctx *RequestContextImpl, path string, useMime bool) {
 		stat, _ := file.Stat()
 		ctx.body = file
 		ctx.status = 200
-		ctx.responseHeaders["Content-Type"] = "application/octet-stream"
-		ctx.responseHeaders["Content-Length"] = strconv.Itoa(int(stat.Size()))
+		ctx.responseHeaders["Content-Type"] = []string{"application/octet-stream"}
+		ctx.responseHeaders["Content-Length"] = []string{strconv.Itoa(int(stat.Size()))}
 		if useMime {
 			if ct := mime.TypeByExtension(filepath.Ext(path)); ct != "" {
-				ctx.responseHeaders["Content-Type"] = ct
+				ctx.responseHeaders["Content-Type"] = []string{ct}
 			}
 
 		}

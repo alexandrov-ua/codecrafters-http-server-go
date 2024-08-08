@@ -12,7 +12,7 @@ import (
 )
 
 func CreateServer() ServerContext {
-	return ServerContext{handlers: make([]MethodDescriptor, 0), middlewares: RoutingMiddleWare}
+	return ServerContext{handlers: make([]MethodDescriptor, 0), middlewares: RoutingMiddleware}
 }
 
 type handlerFunc func(RequestContext)
@@ -91,15 +91,19 @@ func (ctx *ServerContext) AcceptConnection(conn net.Conn) error {
 		return fmt.Errorf("error accepting the connection: %w", err)
 	}
 
-	requestHeaders := make(map[string]string)
+	requestHeaders := make(map[string]headerValue)
 	for headerLine, _, e := reader.ReadLine(); len(headerLine) > 0 && e == nil; headerLine, _, e = reader.ReadLine() {
-		hkey, hval, _ := strings.Cut(string(headerLine), ":")
-		requestHeaders[hkey] = strings.Trim(hval, " ")
+		hName, vals := ParseHeaderLine(headerLine)
+		if _, ok := requestHeaders[hName]; ok {
+			requestHeaders[hName] = append(requestHeaders[hName], vals...)
+		} else {
+			requestHeaders[hName] = vals
+		}
 	}
 
 	var requestBody []byte = make([]byte, 0)
 	if cl, ok := requestHeaders["Content-Length"]; ok {
-		if length, e := strconv.Atoi(cl); e == nil {
+		if length, e := strconv.Atoi(cl.GetFirst()); e == nil {
 			requestBody = make([]byte, length)
 			io.ReadFull(reader, requestBody)
 		}
@@ -111,7 +115,7 @@ func (ctx *ServerContext) AcceptConnection(conn net.Conn) error {
 		status:          200,
 		body:            strings.NewReader(""),
 		params:          make(map[string]string),
-		responseHeaders: make(map[string]string),
+		responseHeaders: make(map[string]headerValue),
 		requestHeaders:  requestHeaders,
 		requestBodyRaw:  requestBody,
 	}
@@ -123,7 +127,7 @@ func (ctx *ServerContext) AcceptConnection(conn net.Conn) error {
 	return nil
 }
 
-func RoutingMiddleWare(ctx *ServerContext, rctx *RequestContextImpl) {
+func RoutingMiddleware(ctx *ServerContext, rctx *RequestContextImpl) {
 	if handler, params, ok := ctx.MatchPath(rctx.method + " " + rctx.path); ok {
 		for k, v := range params {
 			rctx.params[k] = v
@@ -146,6 +150,33 @@ func ParseStartLine(l []byte) (verb string, path string, query string, err error
 	}
 }
 
+func ParseHeaderLine(l []byte) (string, []string) {
+	phase, valueStart := 0, -1
+
+	var headerName string
+	res := make([]string, 0, 1)
+	for i, c := range l {
+		switch {
+		case valueStart <= 0 && (c == ' ' || c == '\t'):
+			continue
+		case phase == 0 && c == ':':
+			headerName = string(l[0:i])
+			phase++
+		case phase == 1 && valueStart == -1:
+			valueStart = i
+		case phase == 1 && valueStart > 0 && c == ',':
+			res = append(res, string(l[valueStart:i]))
+			valueStart = -1
+		}
+	}
+
+	if valueStart > 0 {
+		res = append(res, string(l[valueStart:]))
+	}
+
+	return headerName, res
+}
+
 func (ctx *ServerContext) MatchPath(desc string) (handler handlerFunc, params map[string]string, ok bool) {
 	for _, v := range ctx.handlers {
 		if p, ok := v.Matcher(desc); ok {
@@ -158,7 +189,7 @@ func (ctx *ServerContext) MatchPath(desc string) (handler handlerFunc, params ma
 func WriteResponse(writer *bufio.Writer, req RequestContextImpl) {
 	writer.WriteString(fmt.Sprintf("HTTP/1.1 %v %v\r\n", req.status, statusCodeNames[req.status]))
 	for k, v := range req.responseHeaders {
-		writer.WriteString(fmt.Sprintf("%v: %v\r\n", k, v))
+		writer.WriteString(fmt.Sprintf("%v: %v\r\n", k, strings.Join(v, ", ")))
 	}
 	writer.WriteString("\r\n")
 	writer.ReadFrom(req.body)
@@ -169,7 +200,7 @@ func WriteResponse(writer *bufio.Writer, req RequestContextImpl) {
 type RequestContext interface {
 	GetParam(s string) string
 	GetQuery(s string) string
-	GetHeader(s string) string
+	GetHeader(s string) headerValue
 	RespondWithStatusString(status int, body string)
 	RespondWithStatus(status int)
 	GetBody() string
@@ -179,8 +210,8 @@ type RequestContextImpl struct {
 	path            string
 	method          string
 	params          map[string]string
-	responseHeaders map[string]string
-	requestHeaders  map[string]string
+	responseHeaders map[string]headerValue
+	requestHeaders  map[string]headerValue
 	body            io.Reader
 	status          int
 	requestBodyRaw  []byte
@@ -194,7 +225,7 @@ func (ctx *RequestContextImpl) GetQuery(s string) string {
 	return "" //TODO: implement
 }
 
-func (ctx *RequestContextImpl) GetHeader(s string) string {
+func (ctx *RequestContextImpl) GetHeader(s string) headerValue {
 	return ctx.requestHeaders[s]
 }
 
@@ -209,6 +240,16 @@ func (ctx *RequestContextImpl) RespondWithStatus(status int) {
 func (ctx *RequestContextImpl) RespondWithStatusString(status int, body string) {
 	ctx.body = strings.NewReader(body)
 	ctx.status = status
-	ctx.responseHeaders["Content-Type"] = "text/plain"
-	ctx.responseHeaders["Content-Length"] = strconv.Itoa(len(body))
+	ctx.responseHeaders["Content-Type"] = []string{"text/plain"}
+	ctx.responseHeaders["Content-Length"] = []string{strconv.Itoa(len(body))}
+}
+
+type headerValue []string
+
+func (v headerValue) GetFirst() string {
+	if len(v) > 0 {
+		return v[0]
+	} else {
+		return ""
+	}
 }
