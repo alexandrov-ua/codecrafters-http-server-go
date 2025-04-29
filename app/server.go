@@ -74,6 +74,10 @@ func (ctx *ServerContext) registerHandler(verb string, path string, handler hand
 
 func (ctx *ServerContext) AcceptConnectionAndHandleErrors(conn net.Conn) {
 	if err := ctx.AcceptConnection(conn); err != nil {
+		if err == io.EOF {
+			conn.Close()
+			return
+		}
 		fmt.Println(err)
 		conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
 	}
@@ -82,13 +86,32 @@ func (ctx *ServerContext) AcceptConnectionAndHandleErrors(conn net.Conn) {
 
 func (ctx *ServerContext) AcceptConnection(conn net.Conn) error {
 	reader := bufio.NewReader(conn)
+	writer := bufio.NewWriter(conn)
+
+	for {
+		rctx, err := ctx.ReadRequest(reader)
+		if err != nil {
+			return err
+		}
+
+		ctx.middlewares(ctx, rctx)
+		WriteResponse(writer, rctx)
+		writer.Flush()
+	}
+	return nil
+}
+
+func (ctx *ServerContext) ReadRequest(reader *bufio.Reader) (*RequestContextImpl, error) {
 	line, _, err := reader.ReadLine()
+	if err == io.EOF {
+		return nil, err
+	}
 	if err != nil {
-		return fmt.Errorf("error accepting the connection: %w", err)
+		return nil, fmt.Errorf("error accepting the connection: %w", err)
 	}
 	verb, path, _, err := ParseStartLine(line)
 	if err != nil {
-		return fmt.Errorf("error accepting the connection: %w", err)
+		return nil, fmt.Errorf("error accepting the connection: %w", err)
 	}
 
 	requestHeaders := make(map[string]headerValue)
@@ -119,12 +142,7 @@ func (ctx *ServerContext) AcceptConnection(conn net.Conn) error {
 		requestHeaders:  requestHeaders,
 		requestBodyRaw:  requestBody,
 	}
-	writer := bufio.NewWriter(conn)
-	ctx.middlewares(ctx, &rctx)
-	WriteResponse(writer, rctx)
-	writer.Flush()
-
-	return nil
+	return &rctx, nil
 }
 
 func RoutingMiddleware(ctx *ServerContext, rctx *RequestContextImpl) {
@@ -186,7 +204,7 @@ func (ctx *ServerContext) MatchPath(desc string) (handler handlerFunc, params ma
 	return nil, nil, false
 }
 
-func WriteResponse(writer *bufio.Writer, req RequestContextImpl) {
+func WriteResponse(writer *bufio.Writer, req *RequestContextImpl) {
 	writer.WriteString(fmt.Sprintf("HTTP/1.1 %v %v\r\n", req.status, statusCodeNames[req.status]))
 	for k, v := range req.responseHeaders {
 		writer.WriteString(fmt.Sprintf("%v: %v\r\n", k, strings.Join(v, ", ")))
