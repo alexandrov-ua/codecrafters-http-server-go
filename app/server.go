@@ -12,7 +12,12 @@ import (
 )
 
 func CreateServer() ServerContext {
-	return ServerContext{handlers: make([]MethodDescriptor, 0), middlewares: RoutingMiddleware}
+	serverContext := ServerContext{handlers: make([]MethodDescriptor, 0), middlewares: RoutingMiddleware, closeConnection: false}
+	serverContext.Use(func(next middlewareFuncInternal, ctx *ServerContext, rctx *RequestContextImpl) {
+		ConnaectionHandlingMiddleware(ctx, rctx)
+		next(ctx, rctx)
+	})
+	return serverContext
 }
 
 type handlerFunc func(RequestContext)
@@ -21,8 +26,9 @@ type middlewareFuncInternal func(*ServerContext, *RequestContextImpl)
 type middlewareFunc func(middlewareFuncInternal, *ServerContext, *RequestContextImpl)
 
 type ServerContext struct {
-	handlers    []MethodDescriptor
-	middlewares middlewareFuncInternal
+	handlers        []MethodDescriptor
+	middlewares     middlewareFuncInternal
+	closeConnection bool
 }
 
 type MethodDescriptor struct {
@@ -74,7 +80,7 @@ func (ctx *ServerContext) registerHandler(verb string, path string, handler hand
 
 func (ctx *ServerContext) AcceptConnectionAndHandleErrors(conn net.Conn) {
 	if err := ctx.AcceptConnection(conn); err != nil {
-		if err == io.EOF {
+		if err == io.EOF || ctx.closeConnection {
 			conn.Close()
 			return
 		}
@@ -97,6 +103,9 @@ func (ctx *ServerContext) AcceptConnection(conn net.Conn) error {
 		ctx.middlewares(ctx, rctx)
 		WriteResponse(writer, rctx)
 		writer.Flush()
+		if ctx.closeConnection {
+			return nil
+		}
 	}
 	return nil
 }
@@ -153,6 +162,17 @@ func RoutingMiddleware(ctx *ServerContext, rctx *RequestContextImpl) {
 		handler(rctx)
 	} else {
 		rctx.RespondWithStatus(404)
+	}
+}
+
+func ConnaectionHandlingMiddleware(ctx *ServerContext, rctx *RequestContextImpl) {
+	if val, ok := rctx.requestHeaders["Connection"]; ok {
+		if len(val) > 0 {
+			if strings.ToLower(val[0]) == "close" {
+				rctx.responseHeaders["Connection"] = val
+				ctx.closeConnection = true
+			}
+		}
 	}
 }
 
